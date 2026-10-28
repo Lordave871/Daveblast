@@ -158,7 +158,7 @@ jobs:
           }
           """
           if "Keep Java and Kotlin bytecode targets aligned for CI builds." not in text:
-              text += "\\n" + snippet + "\\n"
+              text += "\n" + snippet + "\n"
           build_file.write_text(text)
           print(f"Enforced Kotlin JVM target 17 in {build_file}")
           PY
