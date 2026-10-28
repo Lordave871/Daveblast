@@ -1,10 +1,18 @@
 
 name: Build Block Blast APK
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     env:
@@ -16,31 +24,131 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Extract Android project
-        run: unzip -o BlockBlastAndroidProject.zip -d .
+        run: |
+          if [ -f BlockBlastAndroidProject.zip ]; then
+            unzip -o BlockBlastAndroidProject.zip -d .
+          fi
 
-      - name: Set up Java
+      - name: Find Android project
+        run: |
+          if [ ! -f app/build.gradle ] && [ ! -f app/build.gradle.kts ]; then
+            echo "Searching for Android project..."
+            find . -type f \( \
+              -name build.gradle -o \
+              -name build.gradle.kts \
+            \) -not -path '*/.gradle/*'
+          fi
+
+          if [ ! -f app/build.gradle ] && [ ! -f app/build.gradle.kts ]; then
+            echo "ERROR: app/build.gradle or app/build.gradle.kts was not found."
+            echo "Check that the Android project files are uploaded."
+            exit 1
+          fi
+
+      - name: Fix Java and Kotlin JVM targets
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          candidates = [
+              Path("app/build.gradle.kts"),
+              Path("app/build.gradle")
+          ]
+
+          build_file = next(
+              (p for p in candidates if p.is_file()),
+              None
+          )
+
+          if build_file is None:
+              raise SystemExit("App Gradle file not found")
+
+          text = build_file.read_text()
+
+          if build_file.suffix == ".kts":
+              block = """compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }"""
+          else:
+              block = """compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }"""
+
+          pattern = r"compileOptions\s*\{[^}]*\}"
+
+          if re.search(pattern, text, re.S):
+              text = re.sub(
+                  pattern,
+                  lambda _: block,
+                  text,
+                  count=1,
+                  flags=re.S
+              )
+          else:
+              match = re.search(r"\bandroid\s*\{", text)
+
+              if not match:
+                  raise SystemExit(
+                      "Could not find the Android Gradle block"
+                  )
+
+              text = (
+                  text[:match.end()]
+                  + "\n    "
+                  + block
+                  + "\n"
+                  + text[match.end():]
+              )
+
+          # Align Kotlin JVM target when the Kotlin DSL is used.
+          if build_file.suffix == ".kts":
+              kotlin_pattern = (
+                  r"kotlinOptions\s*\{[^}]*\}"
+              )
+
+              kotlin_block = """kotlinOptions {
+                  jvmTarget = "17"
+              }"""
+
+              if re.search(kotlin_pattern, text, re.S):
+                  text = re.sub(
+                      kotlin_pattern,
+                      lambda _: kotlin_block,
+                      text,
+                      count=1,
+                      flags=re.S
+                  )
+
+          build_file.write_text(text)
+          print("Updated:", build_file)
+          print("Java compatibility target: 17")
+          PY
+
+      - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      - name: Configure Android SDK
-        run: |
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Install SDK packages
+      - name: Install Android SDK packages
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+          sdkmanager "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Build APK
+      - name: Build Debug APK
         run: gradle assembleDebug
 
       - name: Upload APK
@@ -48,3 +156,5 @@ jobs:
         with:
           name: BlockBlast-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
