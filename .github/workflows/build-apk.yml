@@ -29,6 +29,36 @@ jobs:
             unzip -o BlockBlastAndroidProject.zip -d .
           fi
 
+      - name: Android 11 vibration compatibility
+        shell: bash
+        run: |
+          sed -i '/import android.os.VibratorManager/d' app/src/main/java/com/example/blockblast/MainActivity.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/java/com/example/blockblast/MainActivity.kt")
+          s = p.read_text()
+          a = s.index("    private fun vibrate()")
+          b = s.index("    private fun resetGame()", a)
+          new = '''    private fun vibrate() {
+                  try {
+                      @Suppress("DEPRECATION")
+                      val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                      if (vibrator != null && vibrator.hasVibrator()) {
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              vibrator.vibrate(VibrationEffect.createOneShot(55, VibrationEffect.DEFAULT_AMPLITUDE))
+                          } else {
+                              @Suppress("DEPRECATION")
+                              vibrator.vibrate(55)
+                          }
+                      }
+                  } catch (_: Exception) { }
+              }
+
+          '''
+          p.write_text(s[:a] + new + s[b:])
+          print("Applied Android 11 vibration compatibility patch")
+          PY
+
       - name: Add Block Blast launcher icon
         shell: bash
         run: |
