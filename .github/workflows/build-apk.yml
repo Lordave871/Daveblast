@@ -29,102 +29,336 @@ jobs:
             unzip -o BlockBlastAndroidProject.zip -d .
           fi
 
-      - name: Fix startup initialization crash
+      - name: Install colorful Daveblast game with drag controls and saved best score
         shell: bash
         run: |
-          python3 <<'PY'
-          from pathlib import Path
-          p = Path("app/src/main/java/com/example/blockblast/MainActivity.kt")
-          s = p.read_text()
-          declaration = "    private val pieces = MutableList(3) { randomPiece() }\n"
-          if declaration not in s:
-              raise SystemExit("Could not find the pieces declaration to patch")
-          s = s.replace(declaration, "", 1)
-          anchor = "    )\n\n    private fun randomPiece(): Piece"
-          if anchor not in s:
-              raise SystemExit("Could not find the shapes list end to safely move pieces initialization")
-          s = s.replace(anchor, "    )\n\n" + declaration + "\n    private fun randomPiece(): Piece", 1)
-          p.write_text(s)
-          print("Fixed startup crash: shapes are initialized before random pieces")
-          PY
+          cat > app/src/main/java/com/example/blockblast/MainActivity.kt <<'KOTLIN'
+          package com.example.blockblast
 
-      - name: Upgrade Daveblast visuals and save high score
-        shell: bash
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          p = Path("app/src/main/java/com/example/blockblast/MainActivity.kt")
-          s = p.read_text()
-          replacements = {
-              'window.statusBarColor = android.graphics.Color.rgb(246, 248, 255)': 'window.statusBarColor = android.graphics.Color.rgb(20, 24, 55)',
-              'window.navigationBarColor = android.graphics.Color.rgb(246, 248, 255)': 'window.navigationBarColor = android.graphics.Color.rgb(20, 24, 55)',
-              'window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR': 'window.decorView.systemUiVisibility = 0',
-              'private val bg = android.graphics.Color.rgb(246, 248, 255)': 'private val bg = android.graphics.Color.rgb(20, 24, 55)',
-              'private val ink = android.graphics.Color.rgb(31, 42, 68)': 'private val ink = android.graphics.Color.rgb(248, 250, 255)',
-              'private val muted = android.graphics.Color.rgb(112, 126, 154)': 'private val muted = android.graphics.Color.rgb(172, 185, 224)',
-              'private val gridBg = android.graphics.Color.rgb(225, 232, 246)': 'private val gridBg = android.graphics.Color.rgb(43, 51, 86)',
-              'android.graphics.Color.rgb(69, 129, 255)': 'android.graphics.Color.rgb(74, 133, 255)',
-              'android.graphics.Color.rgb(255, 178, 54)': 'android.graphics.Color.rgb(255, 183, 61)',
-              'android.graphics.Color.rgb(42, 190, 137)': 'android.graphics.Color.rgb(44, 220, 165)',
-              'android.graphics.Color.rgb(173, 105, 244)': 'android.graphics.Color.rgb(190, 102, 255)',
-              'android.graphics.Color.rgb(255, 101, 125)': 'android.graphics.Color.rgb(255, 91, 132)',
-              'android.graphics.Color.rgb(43, 190, 207)': 'android.graphics.Color.rgb(44, 213, 232)',
-              'private var best = 0': 'private var best = context.getSharedPreferences("daveblast_scores", Context.MODE_PRIVATE).getInt("best", 0)',
-              'drawText(canvas, "BLOCK BLAST", width / 2f, 58f, 26f, ink, true, Paint.Align.CENTER)': 'drawText(canvas, "DAVE BLAST", width / 2f, 58f, 28f, colors[0], true, Paint.Align.CENTER)',
-              'rounded(canvas, boardLeft - 7f, boardTop - 7f, boardLeft + cell * 10f + 7f, boardTop + cell * 10f + 7f, 18f, android.graphics.Color.WHITE)': 'rounded(canvas, boardLeft - 7f, boardTop - 7f, boardLeft + cell * 10f + 7f, boardTop + cell * 10f + 7f, 18f, android.graphics.Color.rgb(60, 70, 112))',
-              'if (i == selected && pieces[i].cells.isNotEmpty() && !gameOver) android.graphics.Color.rgb(229, 237, 255) else android.graphics.Color.WHITE': 'if (i == selected && pieces[i].cells.isNotEmpty() && !gameOver) android.graphics.Color.rgb(54, 67, 115) else android.graphics.Color.rgb(31, 37, 74)',
-              'best = maxOf(best, score)': 'updateBest()',
-          }
-          for old, new in replacements.items():
-              if old not in s:
-                  if old == 'best = maxOf(best, score)' and 'updateBest()' in s:
-                      continue
-                  raise SystemExit("Could not find expected code to update: " + old)
-              s = s.replace(old, new)
-          anchor = '    private fun randomPiece(): Piece = Piece(shapes[Random.nextInt(shapes.size)], colors.random())'
-          if anchor not in s:
-              raise SystemExit("Could not find randomPiece function")
-          s = s.replace(anchor, '''    private fun updateBest() {
-              if (score > best) {
-                  best = score
-                  context.getSharedPreferences("daveblast_scores", Context.MODE_PRIVATE)
-                      .edit().putInt("best", best).apply()
+          import android.app.Activity
+          import android.content.Context
+          import android.graphics.Canvas
+          import android.graphics.Paint
+          import android.graphics.RectF
+          import android.graphics.LinearGradient
+          import android.graphics.Shader
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.VibrationEffect
+          import android.os.Vibrator
+          import android.view.MotionEvent
+          import android.view.View
+          import kotlin.math.max
+          import kotlin.math.min
+          import kotlin.random.Random
+
+          class MainActivity : Activity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.statusBarColor = android.graphics.Color.rgb(19, 24, 58)
+                  window.navigationBarColor = android.graphics.Color.rgb(19, 24, 58)
+                  if (Build.VERSION.SDK_INT >= 23) {
+                      window.decorView.systemUiVisibility = 0
+                  }
+                  setContentView(DaveblastView(this))
               }
           }
 
-          private fun randomPiece(): Piece = Piece(shapes[Random.nextInt(shapes.size)], colors.random())''', 1)
-          p.write_text(s)
-          print("Applied Daveblast dark neon theme and persistent high score")
-          PY
+          private data class Piece(val cells: List<Pair<Int, Int>>, val color: Int)
 
-      - name: Android 11 vibration compatibility
-        shell: bash
-        run: |
-          sed -i '/import android.os.VibratorManager/d' app/src/main/java/com/example/blockblast/MainActivity.kt
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("app/src/main/java/com/example/blockblast/MainActivity.kt")
-          s = p.read_text()
-          a = s.index("    private fun vibrate()")
-          b = s.index("    private fun resetGame()", a)
-          new = '''    private fun vibrate() {
+          private class DaveblastView(context: Context) : View(context) {
+              private val prefs = context.getSharedPreferences("daveblast_scores", Context.MODE_PRIVATE)
+              private val bgTop = android.graphics.Color.rgb(24, 32, 78)
+              private val bgBottom = android.graphics.Color.rgb(92, 49, 145)
+              private val white = android.graphics.Color.WHITE
+              private val ink = android.graphics.Color.rgb(32, 37, 77)
+              private val muted = android.graphics.Color.rgb(125, 132, 164)
+              private val emptyCell = android.graphics.Color.rgb(235, 239, 255)
+              private val colors = listOf(
+                  android.graphics.Color.rgb(75, 132, 255),
+                  android.graphics.Color.rgb(255, 174, 55),
+                  android.graphics.Color.rgb(41, 199, 153),
+                  android.graphics.Color.rgb(185, 93, 255),
+                  android.graphics.Color.rgb(255, 91, 126),
+                  android.graphics.Color.rgb(40, 199, 218),
+                  android.graphics.Color.rgb(255, 113, 66)
+              )
+              private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+              private val board = Array(10) { IntArray(10) }
+              private var score = 0
+              private var best = prefs.getInt("best_score", 0)
+              private var gameOver = false
+              private var boardLeft = 0f
+              private var boardTop = 0f
+              private var cell = 0f
+              private var boardSize = 0f
+              private var trayTop = 0f
+              private var trayBottom = 0f
+              private var dragging = -1
+              private var dragX = 0f
+              private var dragY = 0f
+              private var validDrop = false
+              private var selectedRow = -1
+              private var selectedCol = -1
+
+              private val shapes = listOf(
+                  listOf(0 to 0), listOf(0 to 0, 1 to 0), listOf(0 to 0, 0 to 1),
+                  listOf(0 to 0, 1 to 0, 2 to 0), listOf(0 to 0, 0 to 1, 0 to 2),
+                  listOf(0 to 0, 1 to 0, 0 to 1, 1 to 1),
+                  listOf(0 to 0, 1 to 0, 2 to 0, 0 to 1),
+                  listOf(0 to 0, 1 to 0, 2 to 0, 1 to 1),
+                  listOf(0 to 0, 0 to 1, 0 to 2, 1 to 2),
+                  listOf(0 to 0, 1 to 0, 2 to 0, 2 to 1),
+                  listOf(0 to 0, 1 to 0, 2 to 0, 0 to 1, 1 to 1, 2 to 1),
+                  listOf(0 to 0, 0 to 1, 1 to 1, 1 to 2),
+                  listOf(0 to 0, 1 to 0, 2 to 0, 0 to 1, 0 to 2),
+                  listOf(0 to 0, 1 to 0, 1 to 1, 2 to 1),
+                  listOf(0 to 0, 0 to 1, 0 to 2, 1 to 0, 1 to 1, 1 to 2)
+              )
+              private val pieces = MutableList(3) { randomPiece() }
+
+              private fun randomPiece(): Piece = Piece(shapes[Random.nextInt(shapes.size)], colors.random())
+
+              override fun onDraw(canvas: Canvas) {
+                  super.onDraw(canvas)
+                  paint.shader = LinearGradient(0f, 0f, width.toFloat(), height.toFloat(), bgTop, bgBottom, Shader.TileMode.CLAMP)
+                  canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+                  paint.shader = null
+                  paint.color = android.graphics.Color.argb(22, 255, 255, 255)
+                  canvas.drawCircle(width * .05f, height * .16f, width * .23f, paint)
+                  canvas.drawCircle(width * .98f, height * .44f, width * .27f, paint)
+
+                  drawText(canvas, "DAVE", width * .5f, height * .052f, width * .095f, white, true, Paint.Align.CENTER)
+                  drawText(canvas, "B L A S T", width * .5f, height * .085f, width * .046f, android.graphics.Color.rgb(255, 208, 87), true, Paint.Align.CENTER)
+                  drawText(canvas, "Drag blocks • Clear lines • Beat your best", width * .5f, height * .107f, width * .031f, android.graphics.Color.rgb(221, 224, 255), false, Paint.Align.CENTER)
+
+                  val cardY = height * .125f
+                  val cardH = height * .064f
+                  val gap = width * .035f
+                  val cardW = (width - gap * 3f) / 2f
+                  rounded(canvas, gap, cardY, gap + cardW, cardY + cardH, 20f, android.graphics.Color.argb(245, 255, 255, 255))
+                  rounded(canvas, gap * 2f + cardW, cardY, width - gap, cardY + cardH, 20f, android.graphics.Color.argb(245, 255, 255, 255))
+                  drawText(canvas, "SCORE", gap + cardW * .28f, cardY + cardH * .38f, width * .027f, muted, true, Paint.Align.CENTER)
+                  drawText(canvas, score.toString(), gap + cardW * .70f, cardY + cardH * .69f, width * .061f, ink, true, Paint.Align.CENTER)
+                  drawText(canvas, "BEST", gap * 2f + cardW * .28f, cardY + cardH * .38f, width * .027f, muted, true, Paint.Align.CENTER)
+                  drawText(canvas, best.toString(), gap * 2f + cardW * .70f, cardY + cardH * .69f, width * .061f, ink, true, Paint.Align.CENTER)
+
+                  boardSize = min(width * .89f, height * .405f)
+                  cell = boardSize / 10f
+                  boardLeft = (width - boardSize) / 2f
+                  boardTop = height * .215f
+                  rounded(canvas, boardLeft - 7f, boardTop - 7f, boardLeft + boardSize + 7f, boardTop + boardSize + 7f, 22f, android.graphics.Color.argb(90, 15, 19, 50))
+                  rounded(canvas, boardLeft - 4f, boardTop - 4f, boardLeft + boardSize + 4f, boardTop + boardSize + 4f, 19f, white)
+                  for (r in 0 until 10) for (c in 0 until 10) {
+                      val l = boardLeft + c * cell + 1.7f
+                      val t = boardTop + r * cell + 1.7f
+                      val right = l + cell - 3.4f
+                      val bottom = t + cell - 3.4f
+                      val value = board[r][c]
+                      rounded(canvas, l, t, right, bottom, cell * .14f, if (value == 0) emptyCell else value)
+                      if (value != 0) rounded(canvas, l + 2f, t + 2f, right - 2f, t + cell * .23f, cell * .1f, lighten(value))
+                  }
+
+                  val labelY = boardTop + boardSize + height * .033f
+                  drawText(canvas, "PICK UP A BLOCK AND DRAG IT HERE", width * .5f, labelY, width * .031f, white, true, Paint.Align.CENTER)
+                  trayTop = labelY + height * .018f
+                  trayBottom = height - height * .022f
+                  val slotW = width / 3f
+                  for (i in 0..2) {
+                      val l = slotW * i + width * .018f
+                      val r = slotW * (i + 1) - width * .018f
+                      rounded(canvas, l, trayTop, r, trayBottom, 22f, android.graphics.Color.argb(if (dragging == i) 125 else 242, 255, 255, 255))
+                      if (pieces[i].cells.isNotEmpty() && dragging != i) {
+                          drawPiece(canvas, pieces[i], (l + r) / 2f, (trayTop + trayBottom) / 2f - 5f, min(width * .045f, cell * .56f))
+                      }
+                      drawText(canvas, if (pieces[i].cells.isEmpty()) "✓" else "DRAG", (l + r) / 2f, trayBottom - 12f, width * .025f, muted, true, Paint.Align.CENTER)
+                  }
+                  if (dragging >= 0 && pieces[dragging].cells.isNotEmpty()) {
+                      val piece = pieces[dragging]
+                      val origin = dragOrigin(piece, dragX, dragY)
+                      validDrop = canPlace(piece, origin.first, origin.second)
+                      val previewColor = if (validDrop) piece.color else android.graphics.Color.rgb(255, 91, 126)
+                      drawPiece(canvas, piece.copy(color = previewColor), boardLeft + (origin.second + shapeWidth(piece) / 2f) * cell,
+                          boardTop + (origin.first + shapeHeight(piece) / 2f) * cell, cell * .88f, .68f)
+                      drawPiece(canvas, piece, dragX, dragY - cell * 1.7f, min(width * .045f, cell * .56f), .95f)
+                  }
+
+                  if (gameOver) {
+                      paint.color = android.graphics.Color.argb(185, 13, 16, 42)
+                      canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+                      rounded(canvas, width * .09f, height * .36f, width * .91f, height * .62f, 28f, white)
+                      drawText(canvas, "NICE RUN!", width / 2f, height * .415f, width * .075f, ink, true, Paint.Align.CENTER)
+                      drawText(canvas, "Score  $score     Best  $best", width / 2f, height * .455f, width * .043f, muted, true, Paint.Align.CENTER)
+                      rounded(canvas, width * .23f, height * .50f, width * .77f, height * .565f, 20f, colors[0])
+                      drawText(canvas, "PLAY AGAIN", width / 2f, height * .54f, width * .041f, white, true, Paint.Align.CENTER)
+                  }
+              }
+
+              private fun shapeWidth(p: Piece) = p.cells.maxOf { it.first } + 1
+              private fun shapeHeight(p: Piece) = p.cells.maxOf { it.second } + 1
+              private fun dragOrigin(p: Piece, x: Float, y: Float): Pair<Int, Int> {
+                  val col = ((x - boardLeft) / cell - shapeWidth(p) / 2f).toInt()
+                  val row = ((y - boardTop) / cell - shapeHeight(p) / 2f).toInt()
+                  return row to col
+              }
+
+              private fun drawPiece(canvas: Canvas, piece: Piece, centerX: Float, centerY: Float, unit: Float, alpha: Float = 1f) {
+                  val maxX = shapeWidth(piece)
+                  val maxY = shapeHeight(piece)
+                  val startX = centerX - maxX * unit / 2f
+                  val startY = centerY - maxY * unit / 2f
+                  for ((x, y) in piece.cells) {
+                      val l = startX + x * unit + 1f
+                      val t = startY + y * unit + 1f
+                      paint.alpha = (255 * alpha).toInt()
+                      rounded(canvas, l, t, l + unit - 2f, t + unit - 2f, unit * .18f, piece.color)
+                      rounded(canvas, l + unit * .12f, t + unit * .10f, l + unit * .80f, t + unit * .27f, unit * .10f, lighten(piece.color))
+                      paint.alpha = 255
+                  }
+              }
+
+              override fun onTouchEvent(event: MotionEvent): Boolean {
+                  if (event.action == MotionEvent.ACTION_DOWN) {
+                      if (gameOver) return true
+                      if (event.y >= trayTop && event.y <= trayBottom) {
+                          val slot = (event.x / (width / 3f)).toInt().coerceIn(0, 2)
+                          if (pieces[slot].cells.isNotEmpty()) {
+                              dragging = slot
+                              dragX = event.x
+                              dragY = event.y
+                              parent?.requestDisallowInterceptTouchEvent(true)
+                              invalidate()
+                          }
+                      }
+                      return true
+                  }
+                  if (event.action == MotionEvent.ACTION_MOVE && dragging >= 0) {
+                      dragX = event.x
+                      dragY = event.y
+                      val o = dragOrigin(pieces[dragging], dragX, dragY)
+                      validDrop = canPlace(pieces[dragging], o.first, o.second)
+                      invalidate()
+                      return true
+                  }
+                  if (event.action == MotionEvent.ACTION_UP) {
+                      if (gameOver) {
+                          if (event.y in (height * .36f)..(height * .62f)) resetGame()
+                          invalidate()
+                          return true
+                      }
+                      if (dragging >= 0) {
+                          val index = dragging
+                          val piece = pieces[index]
+                          val o = dragOrigin(piece, event.x, event.y)
+                          if (event.x >= boardLeft && event.x <= boardLeft + boardSize && event.y >= boardTop && event.y <= boardTop + boardSize && canPlace(piece, o.first, o.second)) {
+                              placePiece(index, o.first, o.second)
+                          }
+                          dragging = -1
+                          invalidate()
+                          return true
+                      }
+                      return true
+                  }
+                  if (event.action == MotionEvent.ACTION_CANCEL) {
+                      dragging = -1
+                      invalidate()
+                      return true
+                  }
+                  return true
+              }
+
+              private fun canPlace(piece: Piece, row: Int, col: Int): Boolean {
+                  if (row < 0 || col < 0) return false
+                  return piece.cells.all { (x, y) ->
+                      val rr = row + y
+                      val cc = col + x
+                      rr in 0..9 && cc in 0..9 && board[rr][cc] == 0
+                  }
+              }
+
+              private fun placePiece(index: Int, row: Int, col: Int) {
+                  val piece = pieces[index]
+                  if (!canPlace(piece, row, col)) return
+                  for ((x, y) in piece.cells) board[row + y][col + x] = piece.color
+                  score += piece.cells.size
+                  val fullRows = (0..9).filter { r -> (0..9).all { c -> board[r][c] != 0 } }
+                  val fullCols = (0..9).filter { c -> (0..9).all { r -> board[r][c] != 0 } }
+                  for (r in fullRows) for (c in 0..9) board[r][c] = 0
+                  for (c in fullCols) for (r in 0..9) board[r][c] = 0
+                  val cleared = fullRows.size + fullCols.size
+                  if (cleared > 0) {
+                      score += cleared * 10 + if (cleared >= 2) cleared * 5 else 0
+                      vibrate()
+                  }
+                  if (score > best) {
+                      best = score
+                      prefs.edit().putInt("best_score", best).apply()
+                  }
+                  pieces[index] = Piece(emptyList(), piece.color)
+                  if (pieces.all { it.cells.isEmpty() }) for (i in 0..2) pieces[i] = randomPiece()
+                  gameOver = pieces.filter { it.cells.isNotEmpty() }.none { p -> anyFit(p) }
+              }
+
+              private fun anyFit(piece: Piece): Boolean {
+                  for (r in 0..9) for (c in 0..9) if (canPlace(piece, r, c)) return true
+                  return false
+              }
+
+              private fun resetGame() {
+                  for (r in 0..9) board[r].fill(0)
+                  score = 0
+                  gameOver = false
+                  dragging = -1
+                  for (i in 0..2) pieces[i] = randomPiece()
+              }
+
+              private fun vibrate() {
                   try {
                       @Suppress("DEPRECATION")
-                      val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                      if (vibrator != null && vibrator.hasVibrator()) {
-                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                              vibrator.vibrate(VibrationEffect.createOneShot(55, VibrationEffect.DEFAULT_AMPLITUDE))
-                          } else {
+                      val v = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                      if (v != null && v.hasVibrator()) {
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) v.vibrate(VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE))
+                          else {
                               @Suppress("DEPRECATION")
-                              vibrator.vibrate(55)
+                              v.vibrate(45)
                           }
                       }
                   } catch (_: Exception) { }
               }
 
-          '''
-          p.write_text(s[:a] + new + s[b:])
-          print("Applied Android 11 vibration compatibility patch")
+              private fun rounded(canvas: Canvas, l: Float, t: Float, r: Float, b: Float, radius: Float, color: Int) {
+                  paint.shader = null
+                  paint.style = Paint.Style.FILL
+                  paint.color = color
+                  paint.alpha = 255
+                  canvas.drawRoundRect(RectF(l, t, r, b), radius, radius, paint)
+              }
+
+              private fun drawText(canvas: Canvas, text: String, x: Float, y: Float, size: Float, color: Int, bold: Boolean, align: Paint.Align) {
+                  paint.shader = null
+                  paint.color = color
+                  paint.alpha = 255
+                  paint.textSize = size
+                  paint.typeface = if (bold) android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD) else android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+                  paint.textAlign = align
+                  canvas.drawText(text, x, y, paint)
+              }
+
+              private fun lighten(color: Int): Int {
+                  val r = min(255, android.graphics.Color.red(color) + 45)
+                  val g = min(255, android.graphics.Color.green(color) + 45)
+                  val b = min(255, android.graphics.Color.blue(color) + 45)
+                  return android.graphics.Color.rgb(r, g, b)
+              }
+          }
+          KOTLIN
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          s = s.replace('android:label="Block Blast"', 'android:label="Daveblast"')
+          p.write_text(s)
+          print("Daveblast source and app label installed")
           PY
 
       - name: Add Block Blast launcher icon
