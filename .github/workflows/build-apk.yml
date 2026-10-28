@@ -67,12 +67,12 @@ jobs:
           """, encoding="utf-8")
 
           text = manifest.read_text(encoding="utf-8")
-          app_match = re.search(r"<application\\b[^>]*>", text, re.S)
+          app_match = re.search(r"<application\b[^>]*>", text, re.S)
           if not app_match:
               raise SystemExit("Could not find application tag in AndroidManifest.xml")
           tag = app_match.group(0)
-          tag = re.sub(r'\\s+android:icon="[^"]*"', "", tag)
-          tag = re.sub(r'\\s+android:roundIcon="[^"]*"', "", tag)
+          tag = re.sub(r'\s+android:icon="[^"]*"', "", tag)
+          tag = re.sub(r'\s+android:roundIcon="[^"]*"', "", tag)
           tag = tag[:-1] + ' android:icon="@drawable/ic_launcher" android:roundIcon="@drawable/ic_launcher">'
           text = text[:app_match.start()] + tag + text[app_match.end():]
           manifest.write_text(text, encoding="utf-8")
