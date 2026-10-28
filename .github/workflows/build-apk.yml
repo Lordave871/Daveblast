@@ -83,9 +83,13 @@ jobs:
         shell: bash
         run: |
           echo "=== Android manifest ==="
-          find . -path '*/src/main/AndroidManifest.xml' -not -path '*/.gradle/*' -print -exec sed -n '1,220p' {} ;
+          for file in $(find . -path '*/src/main/AndroidManifest.xml' -not -path '*/.gradle/*'); do
+            echo "=== MANIFEST: $file ==="
+            sed -n '1,220p' "$file"
+          done
           echo "=== App source files ==="
-          find app/src/main -type f \( -name '*.kt' -o -name '*.java' \) -not -path '*/.gradle/*' -print
+          find app/src/main -type f -name '*.kt' -print
+          find app/src/main -type f -name '*.java' -print
           while IFS= read -r file; do
             echo "=== SOURCE: $file ==="
             sed -n '1,260p' "$file"
