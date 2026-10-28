@@ -107,28 +107,27 @@ jobs:
 
               override fun onDraw(c: Canvas) {
                   super.onDraw(c)
-                  p.shader = LinearGradient(0f,0f,width.toFloat(),height.toFloat(),Color.rgb(70,105,180),blue,Shader.TileMode.CLAMP)
+                  p.shader = LinearGradient(0f,0f,width.toFloat(),height.toFloat(),Color.rgb(57,91,166),Color.rgb(39,61,119),Shader.TileMode.CLAMP)
                   c.drawRect(0f,0f,width.toFloat(),height.toFloat(),p); p.shader = null
-                  p.color = Color.argb(20,255,255,255)
-                  c.drawCircle(width*.04f,height*.25f,width*.27f,p)
-                  c.drawCircle(width*.98f,height*.53f,width*.24f,p)
+                  p.shader = RadialGradient(width*.5f,height*.44f,width*.68f,intArrayOf(Color.argb(30,139,177,255),Color.argb(0,139,177,255)),null,Shader.TileMode.CLAMP)
+                  c.drawRect(0f,0f,width.toFloat(),height.toFloat(),p); p.shader = null
                   crown(c,width*.10f,height*.047f,width*.04f)
                   text(c,best.toString(),width*.16f,height*.053f,width*.043f,gold,true,Paint.Align.LEFT)
                   gear(c,width*.90f,height*.048f,width*.033f)
                   text(c,score.toString(),width*.5f,height*.105f,width*.105f,Color.WHITE,true,Paint.Align.CENTER)
                   text(c,"D A V E B L A S T",width*.5f,height*.14f,width*.039f,Color.WHITE,true,Paint.Align.CENTER)
                   text(c,"CLASSIC BLOCK PUZZLE",width*.5f,height*.166f,width*.025f,Color.rgb(205,218,250),false,Paint.Align.CENTER)
-                  size = min(width*.92f,height*.435f); unit = size/8f
-                  left = (width-size)/2f; top = height*.205f
-                  round(c,left-4,top-4,left+size+4,top+size+4,15f,Color.argb(70,0,0,0))
-                  round(c,left,top,left+size,top+size,10f,boardColor)
+                  size = min(width*.91f,height*.405f); unit = size/8f
+                  left = (width-size)/2f; top = height*.215f
+                  round(c,left-5,top-5,left+size+5,top+size+5,16f,Color.argb(55,7,15,45))
+                  round(c,left-2,top-2,left+size+2,top+size+2,12f,Color.rgb(61,86,151))
+                  round(c,left,top,left+size,top+size,9f,boardColor)
                   for (r in 0..7) for (col in 0..7) {
                       val x=left+col*unit+1.5f; val y=top+r*unit+1.5f; val color=board[r][col]
-                      round(c,x+1,y+2,x+unit-2,y+unit-2,unit*.1f,Color.argb(90,0,0,0))
-                      round(c,x,y,x+unit-3,y+unit-4,unit*.1f,if(color==0) Color.rgb(35,47,96) else color)
-                      if(color!=0) {
-                          round(c,x+unit*.07f,y+unit*.05f,x+unit*.86f,y+unit*.22f,unit*.07f,light(color,65))
-                          round(c,x+unit*.10f,y+unit*.10f,x+unit*.23f,y+unit*.82f,unit*.05f,light(color,32))
+                      if(color==0) {
+                          round(c,x,y,x+unit-3,y+unit-3,unit*.09f,Color.rgb(32,45,91))
+                      } else {
+                          drawBlock(c,x,y,unit-3,unit-4,color)
                       }
                   }
                   text(c,"DRAG A BLOCK TO THE BOARD",width*.5f,top+size+height*.035f,width*.027f,Color.rgb(224,232,255),true,Paint.Align.CENTER)
@@ -175,12 +174,30 @@ jobs:
                   for((x,y) in a.cells) {
                       val l=sx+x*u+1; val t=sy+y*u+1
                       p.alpha=(255*alpha).toInt()
-                      round(c,l+1,t+2,l+u-2,t+u-1,u*.12f,Color.argb(100,0,0,0))
-                      round(c,l,t,l+u-3,t+u-4,u*.10f,light(a.color,-18))
-                      round(c,l+u*.07f,t+u*.06f,l+u*.86f,t+u*.24f,u*.07f,light(a.color,65))
-                      round(c,l+u*.08f,t+u*.24f,l+u*.20f,t+u*.83f,u*.04f,light(a.color,25))
+                      round(c,l+1,t+3,l+u-2,t+u-1,u*.12f,Color.argb(105,0,0,0))
+                      drawBlock(c,l,t,u-3,u-4,a.color,alpha)
                       p.alpha=255
                   }
+              }
+
+              private fun drawBlock(c:Canvas,l:Float,t:Float,w:Float,h:Float,color:Int,alpha:Float=1f) {
+                  val radius=min(w,h)*.12f
+                  p.shader=null
+                  p.color=Color.argb((115*alpha).toInt(),0,0,0)
+                  c.drawRoundRect(RectF(l+1,t+2,l+w,t+h+1),radius,radius,p)
+                  p.shader=LinearGradient(l,t,l,t+h,light(color,45),light(color,-42),Shader.TileMode.CLAMP)
+                  p.alpha=(255*alpha).toInt()
+                  c.drawRoundRect(RectF(l,t,l+w-1,t+h-1),radius,radius,p)
+                  p.shader=null
+                  p.color=Color.argb((100*alpha).toInt(),255,255,255)
+                  p.style=Paint.Style.STROKE;p.strokeWidth=maxOf(1f,w*.018f)
+                  c.drawRoundRect(RectF(l+1,t+1,l+w-2,t+h-2),radius,radius,p)
+                  p.style=Paint.Style.FILL
+                  p.color=Color.argb((185*alpha).toInt(),255,255,255)
+                  c.drawRoundRect(RectF(l+w*.09f,t+h*.07f,l+w*.88f,t+h*.22f),radius*.6f,radius*.6f,p)
+                  p.color=Color.argb((65*alpha).toInt(),255,255,255)
+                  c.drawRoundRect(RectF(l+w*.08f,t+h*.10f,l+w*.19f,t+h*.82f),radius*.5f,radius*.5f,p)
+                  p.alpha=255
               }
               private fun origin(a:Piece,x:Float,y:Float)=(((y-top)/unit-h(a)/2f).toInt() to ((x-left)/unit-w(a)/2f).toInt())
               private fun can(a:Piece,r:Int,col:Int):Boolean = r>=0 && col>=0 && a.cells.all { (x,y)->r+y in 0..7 && col+x in 0..7 && board[r+y][col+x]==0 }
@@ -241,17 +258,19 @@ jobs:
               private fun drawSettings(c:Canvas) {
                   p.color=Color.argb(195,8,13,36);c.drawRect(0f,0f,width.toFloat(),height.toFloat(),p)
                   val l=width*.09f;val r=width*.91f;val t=height*.29f;val b=height*.70f
-                  round(c,l,t,r,b,26f,Color.WHITE)
-                  text(c,"SETTINGS",width*.5f,t+height*.055f,width*.06f,boardColor,true,Paint.Align.CENTER)
-                  closeHit.set(r-width*.14f,t+8,r-8,t+height*.08f)
-                  text(c,"✕",closeHit.centerX(),closeHit.centerY()+width*.012f,width*.05f,boardColor,true,Paint.Align.CENTER)
-                  text(c,"Sound effects",l+width*.07f,t+height*.13f,width*.039f,boardColor,true,Paint.Align.LEFT)
-                  soundHit.set(r-width*.25f,t+height*.095f,r-width*.06f,t+height*.16f);toggle(c,soundHit,sound)
-                  text(c,"Vibration",l+width*.07f,t+height*.215f,width*.039f,boardColor,true,Paint.Align.LEFT)
-                  vibrationHit.set(r-width*.25f,t+height*.18f,r-width*.06f,t+height*.245f);toggle(c,vibrationHit,vibration)
-                  restartHit.set(width*.20f,t+height*.285f,width*.80f,t+height*.355f)
+                  round(c,l,t,r,b,26f,Color.rgb(248,250,255))
+                  round(c,l,t,r,t+height*.095f,24f,Color.rgb(232,239,255))
+                  text(c,"SETTINGS",width*.5f,t+height*.060f,width*.055f,boardColor,true,Paint.Align.CENTER)
+                  closeHit.set(r-width*.16f,t+height*.018f,r-width*.035f,t+height*.085f)
+                  round(c,closeHit.left,closeHit.top,closeHit.right,closeHit.bottom,closeHit.height()*.4f,Color.WHITE)
+                  text(c,"✕",closeHit.centerX(),closeHit.centerY()+width*.012f,width*.036f,boardColor,true,Paint.Align.CENTER)
+                  text(c,"Sound effects",l+width*.07f,t+height*.145f,width*.038f,boardColor,true,Paint.Align.LEFT)
+                  soundHit.set(r-width*.25f,t+height*.112f,r-width*.06f,t+height*.177f);toggle(c,soundHit,sound)
+                  text(c,"Vibration",l+width*.07f,t+height*.235f,width*.038f,boardColor,true,Paint.Align.LEFT)
+                  vibrationHit.set(r-width*.25f,t+height*.202f,r-width*.06f,t+height*.267f);toggle(c,vibrationHit,vibration)
+                  restartHit.set(width*.20f,t+height*.292f,width*.80f,t+height*.365f)
                   round(c,restartHit.left,restartHit.top,restartHit.right,restartHit.bottom,18f,palette[0])
-                  text(c,"NEW GAME",width*.5f,restartHit.centerY()+width*.014f,width*.041f,Color.WHITE,true,Paint.Align.CENTER)
+                  text(c,"NEW GAME",width*.5f,restartHit.centerY()+width*.014f,width*.039f,Color.WHITE,true,Paint.Align.CENTER)
               }
               private fun toggle(c:Canvas,r:RectF,on:Boolean) {
                   round(c,r.left,r.top,r.right,r.bottom,r.height()/2,if(on)palette[2] else Color.LTGRAY)
