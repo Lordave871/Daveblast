@@ -48,6 +48,55 @@ jobs:
           print("Fixed startup crash: shapes are initialized before random pieces")
           PY
 
+      - name: Upgrade Daveblast visuals and save high score
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/java/com/example/blockblast/MainActivity.kt")
+          s = p.read_text()
+          replacements = {
+              'window.statusBarColor = android.graphics.Color.rgb(246, 248, 255)': 'window.statusBarColor = android.graphics.Color.rgb(20, 24, 55)',
+              'window.navigationBarColor = android.graphics.Color.rgb(246, 248, 255)': 'window.navigationBarColor = android.graphics.Color.rgb(20, 24, 55)',
+              'window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR': 'window.decorView.systemUiVisibility = 0',
+              'private val bg = android.graphics.Color.rgb(246, 248, 255)': 'private val bg = android.graphics.Color.rgb(20, 24, 55)',
+              'private val ink = android.graphics.Color.rgb(31, 42, 68)': 'private val ink = android.graphics.Color.rgb(248, 250, 255)',
+              'private val muted = android.graphics.Color.rgb(112, 126, 154)': 'private val muted = android.graphics.Color.rgb(172, 185, 224)',
+              'private val gridBg = android.graphics.Color.rgb(225, 232, 246)': 'private val gridBg = android.graphics.Color.rgb(43, 51, 86)',
+              'android.graphics.Color.rgb(69, 129, 255)': 'android.graphics.Color.rgb(74, 133, 255)',
+              'android.graphics.Color.rgb(255, 178, 54)': 'android.graphics.Color.rgb(255, 183, 61)',
+              'android.graphics.Color.rgb(42, 190, 137)': 'android.graphics.Color.rgb(44, 220, 165)',
+              'android.graphics.Color.rgb(173, 105, 244)': 'android.graphics.Color.rgb(190, 102, 255)',
+              'android.graphics.Color.rgb(255, 101, 125)': 'android.graphics.Color.rgb(255, 91, 132)',
+              'android.graphics.Color.rgb(43, 190, 207)': 'android.graphics.Color.rgb(44, 213, 232)',
+              'private var best = 0': 'private var best = context.getSharedPreferences("daveblast_scores", Context.MODE_PRIVATE).getInt("best", 0)',
+              'drawText(canvas, "BLOCK BLAST", width / 2f, 58f, 26f, ink, true, Paint.Align.CENTER)': 'drawText(canvas, "DAVE BLAST", width / 2f, 58f, 28f, colors[0], true, Paint.Align.CENTER)',
+              'rounded(canvas, boardLeft - 7f, boardTop - 7f, boardLeft + cell * 10f + 7f, boardTop + cell * 10f + 7f, 18f, android.graphics.Color.WHITE)': 'rounded(canvas, boardLeft - 7f, boardTop - 7f, boardLeft + cell * 10f + 7f, boardTop + cell * 10f + 7f, 18f, android.graphics.Color.rgb(60, 70, 112))',
+              'if (i == selected && pieces[i].cells.isNotEmpty() && !gameOver) android.graphics.Color.rgb(229, 237, 255) else android.graphics.Color.WHITE': 'if (i == selected && pieces[i].cells.isNotEmpty() && !gameOver) android.graphics.Color.rgb(54, 67, 115) else android.graphics.Color.rgb(31, 37, 74)',
+              'best = maxOf(best, score)': 'updateBest()',
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  if old == 'best = maxOf(best, score)' and 'updateBest()' in s:
+                      continue
+                  raise SystemExit("Could not find expected code to update: " + old)
+              s = s.replace(old, new)
+          anchor = '    private fun randomPiece(): Piece = Piece(shapes[Random.nextInt(shapes.size)], colors.random())'
+          if anchor not in s:
+              raise SystemExit("Could not find randomPiece function")
+          s = s.replace(anchor, '''    private fun updateBest() {
+              if (score > best) {
+                  best = score
+                  context.getSharedPreferences("daveblast_scores", Context.MODE_PRIVATE)
+                      .edit().putInt("best", best).apply()
+              }
+          }
+
+          private fun randomPiece(): Piece = Piece(shapes[Random.nextInt(shapes.size)], colors.random())''', 1)
+          p.write_text(s)
+          print("Applied Daveblast dark neon theme and persistent high score")
+          PY
+
       - name: Android 11 vibration compatibility
         shell: bash
         run: |
@@ -299,10 +348,13 @@ jobs:
       - name: Build Debug APK
         run: gradle assembleDebug
 
+      - name: Name APK Daveblast.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/Daveblast.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: BlockBlast-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Daveblast-APK
+          path: app/build/outputs/apk/debug/Daveblast.apk
           if-no-files-found: error
           retention-days: 7
