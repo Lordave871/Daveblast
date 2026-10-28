@@ -29,6 +29,56 @@ jobs:
             unzip -o BlockBlastAndroidProject.zip -d .
           fi
 
+      - name: Add Block Blast launcher icon
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          manifest = Path("app/src/main/AndroidManifest.xml")
+          if not manifest.is_file():
+              candidates = list(Path(".").glob("**/src/main/AndroidManifest.xml"))
+              candidates = [p for p in candidates if ".gradle" not in str(p)]
+              if not candidates:
+                  raise SystemExit("AndroidManifest.xml not found")
+              manifest = candidates[0]
+
+          res = manifest.parent / "res"
+          drawable = res / "drawable"
+          drawable.mkdir(parents=True, exist_ok=True)
+
+          icon = drawable / "ic_launcher.xml"
+          icon.write_text("""<?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path android:fillColor="#101820" android:pathData="M0,0h108v108h-108z"/>
+              <path android:fillColor="#F9C80E" android:pathData="M18,18h30v30h-30z"/>
+              <path android:fillColor="#F86624" android:pathData="M54,18h36v18h-36z"/>
+              <path android:fillColor="#EA3546" android:pathData="M54,42h18v30h-18z"/>
+              <path android:fillColor="#43BCCD" android:pathData="M18,54h30v18h-30z"/>
+              <path android:fillColor="#43BCCD" android:pathData="M18,78h18v12h-18z"/>
+              <path android:fillColor="#7CB518" android:pathData="M42,78h48v12h-48z"/>
+              <path android:fillColor="#F86624" android:pathData="M78,42h12v30h-12z"/>
+          </vector>
+          """, encoding="utf-8")
+
+          text = manifest.read_text(encoding="utf-8")
+          app_match = re.search(r"<application\\b[^>]*>", text, re.S)
+          if not app_match:
+              raise SystemExit("Could not find application tag in AndroidManifest.xml")
+          tag = app_match.group(0)
+          tag = re.sub(r'\\s+android:icon="[^"]*"', "", tag)
+          tag = re.sub(r'\\s+android:roundIcon="[^"]*"', "", tag)
+          tag = tag[:-1] + ' android:icon="@drawable/ic_launcher" android:roundIcon="@drawable/ic_launcher">'
+          text = text[:app_match.start()] + tag + text[app_match.end():]
+          manifest.write_text(text, encoding="utf-8")
+          print(f"Launcher icon added and manifest updated: {manifest}")
+          PY
+
       - name: Find Android project
         run: |
           if [ ! -f app/build.gradle ] && [ ! -f app/build.gradle.kts ]; then
