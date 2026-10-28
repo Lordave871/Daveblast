@@ -1,4 +1,4 @@
-name: Build Daveblast APK
+name: Build Daveblaset APK
 
 on:
   push:
