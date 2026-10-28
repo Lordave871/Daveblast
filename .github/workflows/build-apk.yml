@@ -127,6 +127,42 @@ jobs:
           print("Java compatibility target: 17")
           PY
 
+      - name: Enforce matching Java and Kotlin JVM targets
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          candidates = [Path("app/build.gradle"), Path("app/build.gradle.kts")]
+          build_file = next((p for p in candidates if p.is_file()), None)
+          if build_file is None:
+              raise SystemExit("App Gradle file not found")
+
+          text = build_file.read_text()
+          if build_file.suffix == ".kts":
+              snippet = """
+          // Keep Java and Kotlin bytecode targets aligned for CI builds.
+          tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          """
+          else:
+              snippet = """
+          // Keep Java and Kotlin bytecode targets aligned for CI builds.
+          tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          """
+          if "Keep Java and Kotlin bytecode targets aligned for CI builds." not in text:
+              text += "\\n" + snippet + "\\n"
+          build_file.write_text(text)
+          print(f"Enforced Kotlin JVM target 17 in {build_file}")
+          PY
+
       - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
