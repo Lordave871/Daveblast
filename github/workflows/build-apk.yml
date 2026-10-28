@@ -1,1 +1,1156 @@
+name: Build Daveblast APK
 
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract Android project
+        run: |
+          if [ -f BlockBlastAndroidProject.zip ]; then
+            unzip -o BlockBlastAndroidProject.zip -d .
+          fi
+
+      - name: Install redesigned Daveblast game (iPhone-style UI, combos, Android insets)
+        shell: bash
+        run: |
+          mkdir -p app/src/main/java/com/example/blockblast
+          cat > app/src/main/java/com/example/blockblast/MainActivity.kt <<'KOTLIN'
+          package com.example.blockblast
+
+          import android.app.Activity
+          import android.content.Context
+          import android.content.pm.ActivityInfo
+          import android.graphics.Canvas
+          import android.graphics.Color
+          import android.graphics.LinearGradient
+          import android.graphics.Paint
+          import android.graphics.Path
+          import android.graphics.RadialGradient
+          import android.graphics.RectF
+          import android.graphics.Shader
+          import android.graphics.Typeface
+          import android.graphics.drawable.ColorDrawable
+          import android.media.AudioManager
+          import android.media.ToneGenerator
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.SystemClock
+          import android.os.VibrationEffect
+          import android.os.Vibrator
+          import android.view.HapticFeedbackConstants
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.WindowInsets
+          import android.view.WindowManager
+          import kotlin.math.abs
+          import kotlin.math.max
+          import kotlin.math.min
+          import kotlin.math.roundToInt
+          import kotlin.random.Random
+
+          class MainActivity : Activity() {
+              private var game: DaveblastView? = null
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                  actionBar?.hide()
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                  window.setBackgroundDrawable(ColorDrawable(Color.rgb(39, 61, 119)))
+                  setupEdgeToEdge()
+                  val v = DaveblastView(this)
+                  game = v
+                  setContentView(v)
+              }
+
+              @Suppress("DEPRECATION")
+              private fun setupEdgeToEdge() {
+                  window.statusBarColor = Color.TRANSPARENT
+                  window.navigationBarColor = Color.TRANSPARENT
+                  if (Build.VERSION.SDK_INT >= 29) {
+                      window.isNavigationBarContrastEnforced = false
+                      window.isStatusBarContrastEnforced = false
+                  }
+                  if (Build.VERSION.SDK_INT >= 30) {
+                      window.setDecorFitsSystemWindows(false)
+                  } else {
+                      window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                          View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                          View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                  }
+                  if (Build.VERSION.SDK_INT >= 28) {
+                      val lp = window.attributes
+                      lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                      window.attributes = lp
+                  }
+              }
+
+              @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+              override fun onBackPressed() {
+                  if (game?.handleBack() != true) super.onBackPressed()
+              }
+          }
+
+          internal data class DbPiece(val cells: List<Pair<Int, Int>>, val color: Int) {
+              val w: Int = (cells.maxOfOrNull { it.first } ?: -1) + 1
+              val h: Int = (cells.maxOfOrNull { it.second } ?: -1) + 1
+          }
+
+          private val SHAPE_DEFS = listOf(
+              "#",
+              "##", "#/#",
+              "###", "#/#/#",
+              "####", "#/#/#/#",
+              "#####", "#/#/#/#/#",
+              "##/##", "###/###", "##/##/##", "###/###/###",
+              "#./#./##", ".#/.#/##", "##/#./#.", "##/.#/.#",
+              "###/#..", "###/..#", "#../###", "..#/###",
+              "###/.#.", ".#./###", "#./##/#.", ".#/##/.#",
+              "##./.##", ".##/##.", "#./##/.#", ".#/##/#.",
+              "##/#.", "##/.#", "#./##", ".#/##",
+              "#../#../###", "###/#../#..", "..#/..#/###", "###/..#/..#"
+          )
+
+          private fun parseShape(def: String): List<Pair<Int, Int>> {
+              val out = ArrayList<Pair<Int, Int>>()
+              def.split("/").forEachIndexed { y, row ->
+                  row.forEachIndexed { x, ch -> if (ch == '#') out.add(Pair(x, y)) }
+              }
+              return out
+          }
+
+          internal class DaveblastView(context: Context) : View(context) {
+
+              private class ClearCell(val r: Int, val c: Int, val color: Int, val t0: Long, val delay: Long)
+              private class Particle(
+                  val x0: Float, val y0: Float, val vx: Float, val vy: Float,
+                  val color: Int, val t0: Long, val life: Long, val size: Float
+              )
+              private class Popup(val text: String, val sub: String?, val color: Int, val t0: Long)
+
+              private companion object {
+                  const val CLEAR_MS = 340L
+                  const val POPUP_MS = 1150L
+              }
+
+              // ---------- look ----------
+              private val prefs = context.getSharedPreferences("daveblast_scores", Context.MODE_PRIVATE)
+              private val navy = Color.rgb(25, 35, 79)
+              private val boardColor = Color.rgb(27, 38, 88)
+              private val cellColor = Color.rgb(38, 53, 109)
+              private val gold = Color.rgb(255, 196, 48)
+              private val muted = Color.rgb(98, 116, 176)
+              private val palette = listOf(
+                  Color.rgb(47, 111, 255), Color.rgb(255, 151, 35), Color.rgb(42, 208, 102),
+                  Color.rgb(183, 75, 244), Color.rgb(246, 66, 76), Color.rgb(34, 202, 222),
+                  Color.rgb(255, 202, 55)
+              )
+              private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+              private val bgPaint = Paint()
+              private val glowPaint = Paint()
+              private val rf = RectF()
+              private val crownPath = Path()
+              private val heavy: Typeface = Typeface.create("sans-serif-black", Typeface.NORMAL)
+              private val medium: Typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+
+              // ---------- game state ----------
+              private val board = Array(8) { IntArray(8) }
+              private val pieces = MutableList(3) { DbPiece(emptyList(), 0) }
+              private val placeable = BooleanArray(3)
+              private val pmask = Array(8) { BooleanArray(8) }
+              private val prevRows = BooleanArray(8)
+              private val prevCols = BooleanArray(8)
+              private var prevValid = false
+              private var prevR = 0
+              private var prevC = 0
+
+              private val shapes = SHAPE_DEFS.map { parseShape(it) }
+              private val shapeWeights = shapes.map {
+                  when (it.size) {
+                      1 -> 1
+                      2 -> 3
+                      3 -> 4
+                      4 -> 4
+                      5 -> 3
+                      else -> 1
+                  }
+              }
+              private val totalWeight = shapeWeights.sum()
+
+              private var score = 0
+              private var shown = 0f
+              private var best = prefs.getInt("best_score", 0)
+              private var startBest = best
+              private var sound = prefs.getBoolean("sound_on", true)
+              private var vibration = prefs.getBoolean("vibration_on", true)
+              private var history: List<Int> = (prefs.getString("history", "") ?: "")
+                  .split(",").mapNotNull { it.toIntOrNull() }.sortedDescending().take(5)
+              private var streak = 0
+              private var quiet = 0
+
+              private var settings = false
+              private var scores = false
+              private var over = false
+              private var overT0 = 0L
+              private var overlayT0 = 0L
+              private var spawnT0 = 0L
+              private var scorePopT = 0L
+
+              private var dragging = -1
+              private var dx = 0f
+              private var dy = 0f
+              private var dragT0 = 0L
+              private var downGear = false
+              private var downScores = false
+
+              private val fx = ArrayList<ClearCell>()
+              private val particles = ArrayList<Particle>()
+              private var popup: Popup? = null
+
+              // ---------- layout ----------
+              private var insetTop = 0f
+              private var insetBottom = 0f
+              private var contentTop = 0f
+              private var contentH = 0f
+              private var topCy = 0f
+              private var gearCx = 0f
+              private var gearR = 0f
+              private var scoreY = 0f
+              private var titleY = 0f
+              private var left = 0f
+              private var top = 0f
+              private var size = 0f
+              private var unit = 0f
+              private var trayUnit = 0f
+              private var trayCy = 0f
+              private var trayHitTop = 0f
+              private val gearHit = RectF()
+              private val scoresHit = RectF()
+              private val closeHit = RectF()
+              private val soundHit = RectF()
+              private val vibHit = RectF()
+              private val restartHit = RectF()
+              private val playHit = RectF()
+              private val panelRect = RectF()
+
+              private var tone: ToneGenerator? = try {
+                  ToneGenerator(AudioManager.STREAM_MUSIC, 55)
+              } catch (ignored: Exception) {
+                  null
+              }
+
+              init {
+                  dealPieces()
+              }
+
+              // ---------- window plumbing ----------
+              @Suppress("DEPRECATION")
+              override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
+                  if (Build.VERSION.SDK_INT >= 30) {
+                      val b = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                      insetTop = b.top.toFloat()
+                      insetBottom = b.bottom.toFloat()
+                  } else {
+                      insetTop = insets.systemWindowInsetTop.toFloat()
+                      insetBottom = insets.systemWindowInsetBottom.toFloat()
+                  }
+                  invalidate()
+                  return insets
+              }
+
+              override fun onAttachedToWindow() {
+                  super.onAttachedToWindow()
+                  requestApplyInsets()
+              }
+
+              override fun onDetachedFromWindow() {
+                  super.onDetachedFromWindow()
+                  try {
+                      tone?.release()
+                  } catch (ignored: Exception) {
+                  }
+                  tone = null
+              }
+
+              override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
+                  super.onSizeChanged(w, h, ow, oh)
+                  bgPaint.shader = LinearGradient(
+                      0f, 0f, 0f, h.toFloat(),
+                      Color.rgb(74, 114, 202), Color.rgb(36, 58, 124), Shader.TileMode.CLAMP
+                  )
+                  glowPaint.shader = RadialGradient(
+                      w * .5f, h * .38f, max(w, h) * .62f,
+                      Color.argb(70, 150, 190, 255), Color.argb(0, 150, 190, 255), Shader.TileMode.CLAMP
+                  )
+              }
+
+              fun handleBack(): Boolean {
+                  if (settings || scores) {
+                      settings = false
+                      scores = false
+                      invalidate()
+                      return true
+                  }
+                  return false
+              }
+
+              private fun layout() {
+                  val w = width.toFloat()
+                  val h = height.toFloat()
+                  val d = resources.displayMetrics.density
+                  contentTop = insetTop + 6f * d
+                  contentH = h - contentTop - insetBottom - 8f * d
+                  val a = contentH
+                  topCy = contentTop + a * .045f
+                  gearR = w * .036f
+                  gearCx = w - w * .085f
+                  val gh = gearR * 2.3f
+                  gearHit.set(gearCx - gh, topCy - gh, gearCx + gh, topCy + gh)
+                  scoresHit.set(0f, contentTop, w * .42f, topCy + gh)
+                  scoreY = contentTop + a * .125f
+                  titleY = contentTop + a * .158f
+                  size = min(w * .94f, a * .46f)
+                  unit = size / 8f
+                  left = (w - size) / 2f
+                  top = contentTop + a * .195f
+                  val boardBottom = top + size
+                  val bottomLimit = contentTop + a
+                  trayUnit = min(unit * .62f, (w / 3f) * .8f / 3f)
+                  trayCy = boardBottom + (bottomLimit - boardBottom) * .46f
+                  trayHitTop = boardBottom - unit * .2f
+              }
+
+              // ---------- small helpers ----------
+              private fun wa(color: Int, a: Float): Int =
+                  (color and 0x00FFFFFF) or ((a.coerceIn(0f, 1f) * 255f).toInt() shl 24)
+
+              private fun light(color: Int, amt: Int): Int = Color.rgb(
+                  (Color.red(color) + amt).coerceIn(0, 255),
+                  (Color.green(color) + amt).coerceIn(0, 255),
+                  (Color.blue(color) + amt).coerceIn(0, 255)
+              )
+
+              private fun ease(t: Float): Float = 1f - (1f - t) * (1f - t)
+
+              private fun backOut(t: Float): Float {
+                  val c1 = 1.70158f
+                  val c3 = c1 + 1f
+                  val u = t - 1f
+                  return 1f + c3 * u * u * u + c1 * u * u
+              }
+
+              private fun lift(): Float = unit * 1.9f
+              private fun slotCx(i: Int): Float = width / 3f * (i + .5f)
+
+              private fun randomShape(): List<Pair<Int, Int>> {
+                  var r = Random.nextInt(totalWeight)
+                  for (i in shapes.indices) {
+                      r -= shapeWeights[i]
+                      if (r < 0) return shapes[i]
+                  }
+                  return shapes[0]
+              }
+
+              private fun randomPiece() = DbPiece(randomShape(), palette.random())
+
+              private fun can(a: DbPiece, r: Int, col: Int): Boolean =
+                  a.cells.isNotEmpty() && r >= 0 && col >= 0 &&
+                      a.cells.all { (x, y) -> r + y in 0..7 && col + x in 0..7 && board[r + y][col + x] == 0 }
+
+              private fun canAnywhere(a: DbPiece): Boolean =
+                  a.cells.isNotEmpty() && (0..7).any { rr -> (0..7).any { cc -> can(a, rr, cc) } }
+
+              private fun refreshPlaceable() {
+                  for (i in 0..2) placeable[i] = canAnywhere(pieces[i])
+              }
+
+              private fun dealPieces() {
+                  var tries = 0
+                  do {
+                      for (k in 0..2) pieces[k] = randomPiece()
+                      tries++
+                  } while (tries < 40 && pieces.none { canAnywhere(it) })
+                  spawnT0 = SystemClock.uptimeMillis()
+                  refreshPlaceable()
+              }
+
+              private fun origin(a: DbPiece, cx: Float, cy: Float): Pair<Int, Int> = Pair(
+                  ((cy - top) / unit - a.h / 2f).roundToInt(),
+                  ((cx - left) / unit - a.w / 2f).roundToInt()
+              )
+
+              private fun computePreview() {
+                  prevValid = false
+                  prevRows.fill(false)
+                  prevCols.fill(false)
+                  for (rr in 0..7) pmask[rr].fill(false)
+                  if (dragging < 0) return
+                  val a = pieces[dragging]
+                  val o = origin(a, dx, dy - lift())
+                  if (!can(a, o.first, o.second)) return
+                  prevValid = true
+                  prevR = o.first
+                  prevC = o.second
+                  for ((x, y) in a.cells) pmask[o.first + y][o.second + x] = true
+                  for (rr in 0..7) prevRows[rr] = (0..7).all { board[rr][it] != 0 || pmask[rr][it] }
+                  for (cc in 0..7) prevCols[cc] = (0..7).all { board[it][cc] != 0 || pmask[it][cc] }
+              }
+
+              // ---------- drawing ----------
+              override fun onDraw(c: Canvas) {
+                  super.onDraw(c)
+                  if (width == 0 || height == 0) return
+                  layout()
+                  val now = SystemClock.uptimeMillis()
+                  val w = width.toFloat()
+                  val h = height.toFloat()
+                  var anim = false
+
+                  c.drawRect(0f, 0f, w, h, bgPaint)
+                  c.drawRect(0f, 0f, w, h, glowPaint)
+
+                  // top bar
+                  crown(c, w * .075f, topCy, w * .042f)
+                  txt(c, best.toString(), w * .125f, topCy + w * .018f, w * .05f, gold, Paint.Align.LEFT)
+                  gear(c, gearCx, topCy, gearR)
+
+                  // score
+                  if (shown > score) shown = score.toFloat()
+                  if (shown < score) {
+                      shown = min(score.toFloat(), shown + max(1f, (score - shown) * .16f))
+                      anim = true
+                  }
+                  val pop = max(0f, 1f - (now - scorePopT) / 240f)
+                  if (pop > 0f) anim = true
+                  val scoreSize = min(w * .13f, contentH * .06f) * (1f + .16f * pop)
+                  txt(c, shown.toInt().toString(), w / 2f, scoreY, scoreSize, Color.WHITE, shadow = true)
+                  txt(
+                      c, "DAVEBLAST", w / 2f, titleY, w * .034f, Color.argb(225, 215, 226, 255),
+                      spacing = .28f
+                  )
+
+                  // board
+                  computePreview()
+                  val pad = unit * .08f
+                  fillRound(c, left - pad, top - pad + 6f, left + size + pad, top + size + pad + 10f, w * .035f, Color.argb(70, 5, 10, 40))
+                  fillRound(c, left - pad - 3f, top - pad - 3f, left + size + pad + 3f, top + size + pad + 3f, w * .035f, Color.rgb(88, 118, 200))
+                  fillRound(c, left - pad, top - pad, left + size + pad, top + size + pad, w * .03f, boardColor)
+
+                  val gap = unit * .045f
+                  val s = unit - gap * 2f
+                  val dragColor = if (dragging >= 0) pieces[dragging].color else 0
+                  for (r in 0..7) for (col in 0..7) {
+                      val x = left + col * unit + gap
+                      val y = top + r * unit + gap
+                      val v = board[r][col]
+                      val hl = prevValid && (prevRows[r] || prevCols[col])
+                      if (v != 0) {
+                          drawBlock(c, x, y, s, if (hl) dragColor else v)
+                      } else {
+                          fillRound(c, x, y, x + s, y + s, s * .16f, cellColor)
+                      }
+                  }
+
+                  // clearing blocks
+                  if (fx.isNotEmpty()) {
+                      anim = true
+                      for (f in fx) {
+                          val el = now - f.t0 - f.delay
+                          val x = left + f.c * unit + gap
+                          val y = top + f.r * unit + gap
+                          if (el < 0) {
+                              drawBlock(c, x, y, s, f.color)
+                              continue
+                          }
+                          val k = el.toFloat() / CLEAR_MS
+                          if (k >= 1f) continue
+                          val sc = if (k < .22f) 1f + .18f * (k / .22f) else 1.18f * (1f - (k - .22f) / .78f)
+                          val sz = s * sc
+                          val off = (s - sz) / 2f
+                          drawBlock(c, x + off, y + off, sz, f.color, 1f - k * .4f)
+                          fillRound(c, x + off, y + off, x + off + sz, y + off + sz, sz * .17f, wa(Color.WHITE, (1f - k) * .85f))
+                      }
+                      fx.removeAll { now - it.t0 - it.delay >= CLEAR_MS }
+                  }
+
+                  // particles
+                  if (particles.isNotEmpty()) {
+                      anim = true
+                      p.shader = null
+                      p.style = Paint.Style.FILL
+                      for (q in particles) {
+                          val el = now - q.t0
+                          if (el < 0 || el > q.life) continue
+                          val t = el / 1000f
+                          val k = el.toFloat() / q.life
+                          val x = q.x0 + q.vx * t
+                          val y = q.y0 + q.vy * t + unit * 16f * t * t
+                          val sz = q.size * (1f - k * .6f)
+                          p.color = wa(q.color, 1f - k * k)
+                          rf.set(x - sz / 2f, y - sz / 2f, x + sz / 2f, y + sz / 2f)
+                          c.drawRoundRect(rf, sz * .25f, sz * .25f, p)
+                      }
+                      particles.removeAll { now - it.t0 > it.life }
+                  }
+
+                  // placement ghost
+                  if (prevValid && dragging >= 0) {
+                      val a = pieces[dragging]
+                      for ((x, y) in a.cells) {
+                          val rr = prevR + y
+                          val cc = prevC + x
+                          val full = prevRows[rr] || prevCols[cc]
+                          drawBlock(c, left + cc * unit + gap, top + rr * unit + gap, s, a.color, if (full) .92f else .42f)
+                      }
+                  }
+
+                  // hint
+                  val boardBottom = top + size
+                  if (score == 0 && dragging < 0 && !over && !settings && !scores) {
+                      val hy = boardBottom + (contentTop + contentH - boardBottom) * .1f
+                      txt(c, "DRAG A BLOCK TO THE BOARD", w / 2f, hy, w * .03f, Color.argb(215, 224, 232, 255), spacing = .08f)
+                  }
+
+                  // tray
+                  for (i in 0..2) {
+                      val a = pieces[i]
+                      if (a.cells.isEmpty() || dragging == i) continue
+                      val t = ((now - spawnT0 - i * 70L) / 300f).coerceIn(0f, 1f)
+                      if (t < 1f) anim = true
+                      val sc = .55f + .45f * backOut(t)
+                      drawPiece(c, a, slotCx(i), trayCy, trayUnit * sc, if (placeable[i]) 1f else .38f)
+                  }
+
+                  // dragged piece
+                  if (dragging >= 0) {
+                      val a = pieces[dragging]
+                      val k = ease(((now - dragT0) / 120f).coerceIn(0f, 1f))
+                      if (k < 1f) anim = true
+                      val u = trayUnit + (unit - trayUnit) * k
+                      val hx = slotCx(dragging)
+                      val cx = hx + (dx - hx) * k
+                      val cy = trayCy + (dy - lift() - trayCy) * k
+                      drawPiece(c, a, cx, cy, u, 1f, true)
+                  }
+
+                  // combo popup
+                  val po = popup
+                  if (po != null) {
+                      val el = now - po.t0
+                      if (el > POPUP_MS) {
+                          popup = null
+                      } else {
+                          anim = true
+                          val sc = backOut((el / 280f).coerceIn(0f, 1f))
+                          val fade = if (el > 800L) 1f - (el - 800L) / 350f else 1f
+                          val base = min(w * .17f, w * .86f / (po.text.length * .66f))
+                          val cx = w / 2f
+                          val cy = top + size * .44f - el * .02f
+                          txt(
+                              c, po.text, cx, cy, base * sc, wa(po.color, fade),
+                              outline = wa(navy, fade), outlineW = base * sc * .16f
+                          )
+                          if (po.sub != null) {
+                              val ss = w * .055f * sc
+                              txt(
+                                  c, po.sub, cx, cy + base * .62f * sc, ss, wa(Color.WHITE, fade),
+                                  outline = wa(navy, fade), outlineW = ss * .2f
+                              )
+                          }
+                      }
+                  }
+
+                  // overlays
+                  if (over) {
+                      val e = now - overT0 - 700L
+                      if (e < 0L) {
+                          anim = true
+                      } else {
+                          val k = ease((e / 260f).coerceIn(0f, 1f))
+                          if (k < 1f) anim = true
+                          drawOver(c, k)
+                      }
+                  }
+                  if (scores) {
+                      val k = ease(((now - overlayT0) / 180f).coerceIn(0f, 1f))
+                      if (k < 1f) anim = true
+                      drawScores(c, k)
+                  }
+                  if (settings) {
+                      val k = ease(((now - overlayT0) / 180f).coerceIn(0f, 1f))
+                      if (k < 1f) anim = true
+                      drawSettings(c, k)
+                  }
+
+                  if (anim) postInvalidateOnAnimation()
+              }
+
+              private fun fillRound(c: Canvas, l: Float, t: Float, r: Float, b: Float, rad: Float, color: Int) {
+                  p.shader = null
+                  p.style = Paint.Style.FILL
+                  p.color = color
+                  rf.set(l, t, r, b)
+                  c.drawRoundRect(rf, rad, rad, p)
+              }
+
+              private fun txt(
+                  c: Canvas, s: String, x: Float, y: Float, size: Float, color: Int,
+                  align: Paint.Align = Paint.Align.CENTER, bold: Boolean = true,
+                  spacing: Float = 0f, outline: Int = 0, outlineW: Float = 0f, shadow: Boolean = false
+              ) {
+                  p.shader = null
+                  p.textSize = size
+                  p.textAlign = align
+                  p.letterSpacing = spacing
+                  p.typeface = if (bold) heavy else medium
+                  if (shadow) {
+                      p.style = Paint.Style.FILL
+                      p.color = Color.argb(90, 8, 16, 60)
+                      c.drawText(s, x, y + size * .05f, p)
+                  }
+                  if (outline != 0) {
+                      p.style = Paint.Style.STROKE
+                      p.strokeWidth = outlineW
+                      p.strokeJoin = Paint.Join.ROUND
+                      p.color = outline
+                      c.drawText(s, x, y, p)
+                  }
+                  p.style = Paint.Style.FILL
+                  p.color = color
+                  c.drawText(s, x, y, p)
+                  p.letterSpacing = 0f
+              }
+
+              private fun drawBlock(c: Canvas, l: Float, t: Float, s: Float, color: Int, al: Float = 1f) {
+                  val rad = s * .17f
+                  p.shader = null
+                  p.style = Paint.Style.FILL
+                  p.color = wa(light(color, -70), al)
+                  rf.set(l, t + s * .07f, l + s, t + s)
+                  c.drawRoundRect(rf, rad, rad, p)
+                  p.color = wa(light(color, 60), al)
+                  rf.set(l, t, l + s, t + s * .93f)
+                  c.drawRoundRect(rf, rad, rad, p)
+                  p.color = wa(color, al)
+                  rf.set(l + s * .09f, t + s * .09f, l + s * .91f, t + s * .82f)
+                  c.drawRoundRect(rf, rad * .7f, rad * .7f, p)
+                  p.color = wa(light(color, 28), al * .9f)
+                  rf.set(l + s * .09f, t + s * .09f, l + s * .91f, t + s * .45f)
+                  c.drawRoundRect(rf, rad * .7f, rad * .7f, p)
+                  p.color = wa(Color.WHITE, al * .55f)
+                  rf.set(l + s * .17f, t + s * .14f, l + s * .55f, t + s * .25f)
+                  c.drawRoundRect(rf, s * .05f, s * .05f, p)
+              }
+
+              private fun drawPiece(c: Canvas, a: DbPiece, cx: Float, cy: Float, u: Float, al: Float = 1f, shadow: Boolean = false) {
+                  val sx = cx - a.w * u / 2f
+                  val sy = cy - a.h * u / 2f
+                  val gap = u * .045f
+                  val s = u - gap * 2f
+                  if (shadow) {
+                      p.shader = null
+                      p.style = Paint.Style.FILL
+                      p.color = Color.argb(70, 5, 10, 40)
+                      for ((x, y) in a.cells) {
+                          val l = sx + x * u + gap
+                          val t = sy + y * u + gap + u * .18f
+                          rf.set(l, t, l + s, t + s)
+                          c.drawRoundRect(rf, s * .17f, s * .17f, p)
+                      }
+                  }
+                  for ((x, y) in a.cells) drawBlock(c, sx + x * u + gap, sy + y * u + gap, s, a.color, al)
+              }
+
+              private fun gear(c: Canvas, x: Float, y: Float, r: Float) {
+                  p.shader = null
+                  p.color = Color.WHITE
+                  p.style = Paint.Style.STROKE
+                  p.strokeWidth = r * .34f
+                  c.drawCircle(x, y, r * .52f, p)
+                  p.style = Paint.Style.FILL
+                  c.save()
+                  for (i in 0 until 8) {
+                      rf.set(x - r * .15f, y - r * 1.02f, x + r * .15f, y - r * .62f)
+                      c.drawRoundRect(rf, r * .08f, r * .08f, p)
+                      c.rotate(45f, x, y)
+                  }
+                  c.restore()
+              }
+
+              private fun crown(c: Canvas, x: Float, y: Float, s: Float) {
+                  p.shader = null
+                  p.style = Paint.Style.FILL
+                  p.color = gold
+                  crownPath.reset()
+                  crownPath.moveTo(x - s, y - s * .3f)
+                  crownPath.lineTo(x - s * .8f, y + s * .4f)
+                  crownPath.lineTo(x + s * .8f, y + s * .4f)
+                  crownPath.lineTo(x + s, y - s * .3f)
+                  crownPath.lineTo(x + s * .3f, y)
+                  crownPath.lineTo(x, y - s * .65f)
+                  crownPath.lineTo(x - s * .3f, y)
+                  crownPath.close()
+                  c.drawPath(crownPath, p)
+                  c.drawCircle(x - s, y - s * .3f, s * .13f, p)
+                  c.drawCircle(x + s, y - s * .3f, s * .13f, p)
+                  c.drawCircle(x, y - s * .65f, s * .13f, p)
+                  fillRound(c, x - s * .9f, y + s * .46f, x + s * .9f, y + s * .68f, s * .09f, Color.rgb(240, 160, 20))
+              }
+
+              private fun scrim(c: Canvas, k: Float) {
+                  p.shader = null
+                  p.style = Paint.Style.FILL
+                  p.color = Color.argb((195 * k).toInt().coerceIn(0, 255), 8, 13, 36)
+                  c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), p)
+              }
+
+              private fun panel(c: Canvas, l: Float, t: Float, r: Float, b: Float, rad: Float) {
+                  fillRound(c, l, t + 10f, r, b + 10f, rad, Color.argb(70, 0, 0, 20))
+                  fillRound(c, l, t, r, b, rad, Color.rgb(247, 249, 255))
+              }
+
+              private fun button(c: Canvas, r: RectF, label: String, color: Int) {
+                  val d = r.height() * .09f
+                  val rad = r.height() * .32f
+                  fillRound(c, r.left, r.top + d, r.right, r.bottom + d, rad, light(color, -60))
+                  fillRound(c, r.left, r.top, r.right, r.bottom, rad, color)
+                  fillRound(
+                      c, r.left + r.width() * .05f, r.top + r.height() * .08f,
+                      r.right - r.width() * .05f, r.top + r.height() * .40f, r.height() * .2f,
+                      wa(Color.WHITE, .22f)
+                  )
+                  txt(c, label, r.centerX(), r.centerY() + r.height() * .16f, r.height() * .4f, Color.WHITE)
+              }
+
+              private fun toggle(c: Canvas, r: RectF, on: Boolean) {
+                  fillRound(
+                      c, r.left, r.top, r.right, r.bottom, r.height() / 2f,
+                      if (on) Color.rgb(42, 208, 102) else Color.rgb(184, 192, 214)
+                  )
+                  val kx = if (on) r.right - r.height() / 2f else r.left + r.height() / 2f
+                  p.color = Color.WHITE
+                  p.style = Paint.Style.FILL
+                  c.drawCircle(kx, r.centerY(), r.height() * .39f, p)
+                  txt(
+                      c, if (on) "ON" else "OFF",
+                      if (on) r.left + r.width() * .30f else r.right - r.width() * .30f,
+                      r.centerY() + r.height() * .12f, r.height() * .30f, Color.WHITE
+                  )
+              }
+
+              private fun drawSettings(c: Canvas, k: Float) {
+                  val w = width.toFloat()
+                  scrim(c, k)
+                  val pw = w * .86f
+                  val rowH = w * .17f
+                  val headH = w * .19f
+                  val btnH = w * .15f
+                  val ph = headH + rowH * 2f + btnH + w * .09f
+                  val l = (w - pw) / 2f
+                  val t = contentTop + contentH * .5f - ph / 2f
+                  val r = l + pw
+                  val b = t + ph
+                  panelRect.set(l, t, r, b)
+                  val rad = w * .06f
+                  c.save()
+                  val sc = .9f + .1f * k
+                  c.scale(sc, sc, w / 2f, (t + b) / 2f)
+                  panel(c, l, t, r, b, rad)
+                  fillRound(c, l, t, r, t + headH, rad, Color.rgb(228, 236, 255))
+                  p.style = Paint.Style.FILL
+                  p.color = Color.rgb(228, 236, 255)
+                  c.drawRect(l, t + headH * .5f, r, t + headH, p)
+                  txt(c, "SETTINGS", w / 2f, t + headH * .62f, w * .06f, navy, spacing = .08f)
+
+                  closeHit.set(r - w * .155f, t + headH * .5f - w * .055f, r - w * .045f, t + headH * .5f + w * .055f)
+                  fillRound(c, closeHit.left, closeHit.top, closeHit.right, closeHit.bottom, closeHit.width() / 2f, Color.WHITE)
+                  p.style = Paint.Style.STROKE
+                  p.strokeWidth = w * .012f
+                  p.strokeCap = Paint.Cap.ROUND
+                  p.color = navy
+                  val q = closeHit.width() * .2f
+                  val ccx = closeHit.centerX()
+                  val ccy = closeHit.centerY()
+                  c.drawLine(ccx - q, ccy - q, ccx + q, ccy + q, p)
+                  c.drawLine(ccx + q, ccy - q, ccx - q, ccy + q, p)
+                  p.strokeCap = Paint.Cap.BUTT
+                  p.style = Paint.Style.FILL
+
+                  val tw = w * .2f
+                  val th = w * .1f
+                  val lx = l + pw * .08f
+                  val rx = r - pw * .08f
+                  val y1 = t + headH + rowH * .5f
+                  txt(c, "Sound effects", lx, y1 + w * .014f, w * .042f, navy, Paint.Align.LEFT)
+                  soundHit.set(rx - tw, y1 - th / 2f, rx, y1 + th / 2f)
+                  toggle(c, soundHit, sound)
+                  fillRound(c, l + pw * .06f, t + headH + rowH - 1f, r - pw * .06f, t + headH + rowH + 1f, 1f, Color.rgb(224, 229, 244))
+                  val y2 = t + headH + rowH * 1.5f
+                  txt(c, "Vibration", lx, y2 + w * .014f, w * .042f, navy, Paint.Align.LEFT)
+                  vibHit.set(rx - tw, y2 - th / 2f, rx, y2 + th / 2f)
+                  toggle(c, vibHit, vibration)
+
+                  val by = t + headH + rowH * 2f + w * .035f
+                  restartHit.set(l + pw * .1f, by, r - pw * .1f, by + btnH)
+                  button(c, restartHit, "NEW GAME", palette[0])
+                  c.restore()
+              }
+
+              private fun drawScores(c: Canvas, k: Float) {
+                  val w = width.toFloat()
+                  scrim(c, k)
+                  val pw = w * .82f
+                  val ph = w * .26f + w * .105f * 5f + w * .13f
+                  val l = (w - pw) / 2f
+                  val t = contentTop + contentH * .5f - ph / 2f
+                  val r = l + pw
+                  val b = t + ph
+                  c.save()
+                  val sc = .9f + .1f * k
+                  c.scale(sc, sc, w / 2f, (t + b) / 2f)
+                  panel(c, l, t, r, b, w * .06f)
+                  crown(c, w * .5f, t + w * .095f, w * .05f)
+                  txt(c, "HIGH SCORES", w * .5f, t + w * .2f, w * .058f, navy, spacing = .06f)
+                  if (history.isEmpty()) {
+                      txt(c, "Play a game to set your record!", w * .5f, t + ph * .55f, w * .036f, muted, bold = false)
+                  } else {
+                      history.forEachIndexed { idx, v ->
+                          val y = t + w * .31f + idx * w * .105f
+                          if (idx % 2 == 0) {
+                              fillRound(c, l + pw * .07f, y - w * .07f, r - pw * .07f, y + w * .03f, w * .03f, Color.rgb(236, 241, 255))
+                          }
+                          txt(c, (idx + 1).toString(), l + pw * .14f, y, w * .045f, if (idx == 0) Color.rgb(230, 150, 10) else muted)
+                          txt(c, v.toString(), r - pw * .14f, y, w * .05f, navy, Paint.Align.RIGHT)
+                      }
+                  }
+                  txt(c, "TAP ANYWHERE TO CLOSE", w * .5f, b - w * .04f, w * .028f, muted, spacing = .1f)
+                  c.restore()
+              }
+
+              private fun drawOver(c: Canvas, k: Float) {
+                  val w = width.toFloat()
+                  scrim(c, k * .9f)
+                  val pw = w * .84f
+                  val ph = w * .82f
+                  val l = (w - pw) / 2f
+                  val t = contentTop + contentH * .5f - ph / 2f
+                  val r = l + pw
+                  val b = t + ph
+                  c.save()
+                  val sc = .88f + .12f * backOut(k)
+                  c.scale(sc, sc, w / 2f, (t + b) / 2f)
+                  panel(c, l, t, r, b, w * .06f)
+                  txt(c, "GAME OVER", w / 2f, t + w * .14f, w * .08f, navy, spacing = .04f)
+                  txt(c, "SCORE", w / 2f, t + w * .24f, w * .032f, muted, spacing = .2f)
+                  txt(c, score.toString(), w / 2f, t + w * .4f, w * .17f, palette[0])
+                  if (score > startBest) {
+                      val bw = w * .3f
+                      fillRound(c, w / 2f - bw / 2f, t + w * .44f, w / 2f + bw / 2f, t + w * .53f, w * .045f, gold)
+                      txt(c, "NEW BEST!", w / 2f, t + w * .502f, w * .04f, navy)
+                  } else {
+                      txt(c, "BEST  $best", w / 2f, t + w * .5f, w * .045f, muted)
+                  }
+                  playHit.set(l + pw * .12f, b - w * .22f, r - pw * .12f, b - w * .22f + w * .15f)
+                  button(c, playHit, "PLAY AGAIN", palette[2])
+                  c.restore()
+              }
+
+              // ---------- touch ----------
+              override fun onTouchEvent(e: MotionEvent): Boolean {
+                  val now = SystemClock.uptimeMillis()
+                  when (e.actionMasked) {
+                      MotionEvent.ACTION_DOWN -> {
+                          downGear = false
+                          downScores = false
+                          if (over || settings || scores) return true
+                          if (gearHit.contains(e.x, e.y)) {
+                              downGear = true
+                              return true
+                          }
+                          if (scoresHit.contains(e.x, e.y)) {
+                              downScores = true
+                              return true
+                          }
+                          if (e.y >= trayHitTop) {
+                              val i = (e.x / (width / 3f)).toInt().coerceIn(0, 2)
+                              if (pieces[i].cells.isNotEmpty()) {
+                                  dragging = i
+                                  dx = e.x
+                                  dy = e.y
+                                  dragT0 = now
+                                  parent?.requestDisallowInterceptTouchEvent(true)
+                                  invalidate()
+                              }
+                          }
+                          return true
+                      }
+                      MotionEvent.ACTION_MOVE -> {
+                          if (dragging >= 0) {
+                              dx = e.x
+                              dy = e.y
+                              invalidate()
+                          }
+                          return true
+                      }
+                      MotionEvent.ACTION_UP -> {
+                          if (over) {
+                              if (playHit.contains(e.x, e.y) && now - overT0 > 900L) newGame()
+                              return true
+                          }
+                          if (settings) {
+                              settingsTap(e.x, e.y)
+                              invalidate()
+                              return true
+                          }
+                          if (scores) {
+                              scores = false
+                              invalidate()
+                              return true
+                          }
+                          if (downGear && gearHit.contains(e.x, e.y)) {
+                              downGear = false
+                              settings = true
+                              overlayT0 = now
+                              invalidate()
+                              return true
+                          }
+                          if (downScores && scoresHit.contains(e.x, e.y)) {
+                              downScores = false
+                              scores = true
+                              overlayT0 = now
+                              invalidate()
+                              return true
+                          }
+                          if (dragging >= 0) {
+                              val i = dragging
+                              val a = pieces[i]
+                              val o = origin(a, e.x, e.y - lift())
+                              dragging = -1
+                              if (can(a, o.first, o.second)) put(i, o.first, o.second)
+                              invalidate()
+                          }
+                          return true
+                      }
+                      MotionEvent.ACTION_CANCEL -> {
+                          dragging = -1
+                          downGear = false
+                          downScores = false
+                          invalidate()
+                          return true
+                      }
+                  }
+                  return true
+              }
+
+              private fun settingsTap(x: Float, y: Float) {
+                  when {
+                      closeHit.contains(x, y) -> settings = false
+                      soundHit.contains(x, y) -> {
+                          sound = !sound
+                          prefs.edit().putBoolean("sound_on", sound).apply()
+                          sfx(0)
+                      }
+                      vibHit.contains(x, y) -> {
+                          vibration = !vibration
+                          prefs.edit().putBoolean("vibration_on", vibration).apply()
+                          buzz(30L)
+                      }
+                      restartHit.contains(x, y) -> newGame()
+                      !panelRect.contains(x, y) -> settings = false
+                  }
+              }
+
+              // ---------- game logic ----------
+              private fun put(i: Int, r: Int, col: Int) {
+                  val a = pieces[i]
+                  if (!can(a, r, col)) return
+                  val now = SystemClock.uptimeMillis()
+                  for ((x, y) in a.cells) board[r + y][col + x] = a.color
+                  var gain = a.cells.size
+
+                  val fullRows = (0..7).filter { rr -> (0..7).all { board[rr][it] != 0 } }
+                  val fullCols = (0..7).filter { cc -> (0..7).all { board[it][cc] != 0 } }
+                  val lines = fullRows.size + fullCols.size
+                  var perfect = false
+
+                  if (lines > 0) {
+                      val mask = Array(8) { BooleanArray(8) }
+                      for (rr in fullRows) for (cc in 0..7) mask[rr][cc] = true
+                      for (cc in fullCols) for (rr in 0..7) mask[rr][cc] = true
+                      val ocx = col + a.w / 2f
+                      val ocy = r + a.h / 2f
+                      for (rr in 0..7) for (cc in 0..7) {
+                          if (!mask[rr][cc]) continue
+                          val dist = abs(cc + .5f - ocx) + abs(rr + .5f - ocy)
+                          val delay = (dist * 22f).toLong()
+                          val color = board[rr][cc]
+                          fx.add(ClearCell(rr, cc, color, now, delay))
+                          spawnParticles(rr, cc, color, now + delay)
+                          board[rr][cc] = 0
+                      }
+                      streak++
+                      quiet = 0
+                      gain += 10 * lines * (lines + 1) / 2 * streak
+                      perfect = board.all { row -> row.all { it == 0 } }
+                      if (perfect) gain += 150
+
+                      val n = max(lines, streak)
+                      popup = when {
+                          perfect -> Popup("PERFECT!", "+$gain", Color.rgb(64, 224, 240), now)
+                          lines >= 2 || streak >= 2 -> Popup("LORDAVE", "COMBO x$n   +$gain", Color.rgb(255, 112, 67), now)
+                          else -> Popup("DAVE!", "+$gain", gold, now)
+                      }
+                      sfx(if (lines >= 2 || perfect) 2 else 1)
+                      buzz(if (lines >= 2) 60L else 40L)
+                  } else {
+                      quiet++
+                      if (quiet >= 3) streak = 0
+                      sfx(0)
+                      if (vibration) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                  }
+
+                  score += gain
+                  scorePopT = now
+                  if (score > best) {
+                      best = score
+                      prefs.edit().putInt("best_score", best).apply()
+                  }
+
+                  pieces[i] = DbPiece(emptyList(), 0)
+                  if (pieces.all { it.cells.isEmpty() }) dealPieces()
+                  refreshPlaceable()
+
+                  if (pieces.none { canAnywhere(it) }) {
+                      over = true
+                      overT0 = now
+                      if (score > 0) {
+                          history = (history + score).sortedDescending().take(5)
+                          prefs.edit().putString("history", history.joinToString(",")).apply()
+                      }
+                      sfx(3)
+                      buzz(120L)
+                  }
+              }
+
+              private fun spawnParticles(r: Int, col: Int, color: Int, t0: Long) {
+                  if (particles.size > 220) return
+                  val cx = left + (col + .5f) * unit
+                  val cy = top + (r + .5f) * unit
+                  for (k in 0 until 3) {
+                      particles.add(
+                          Particle(
+                              cx, cy,
+                              (Random.nextFloat() - .5f) * unit * 9f,
+                              -(Random.nextFloat() * unit * 6f + unit * 1.5f),
+                              color, t0, 600L + Random.nextInt(300),
+                              unit * (.12f + Random.nextFloat() * .1f)
+                          )
+                      )
+                  }
+              }
+
+              private fun newGame() {
+                  for (r in 0..7) board[r].fill(0)
+                  score = 0
+                  shown = 0f
+                  streak = 0
+                  quiet = 0
+                  over = false
+                  settings = false
+                  scores = false
+                  dragging = -1
+                  fx.clear()
+                  particles.clear()
+                  popup = null
+                  startBest = best
+                  dealPieces()
+                  invalidate()
+              }
+
+              private fun sfx(kind: Int) {
+                  if (!sound) return
+                  try {
+                      when (kind) {
+                          0 -> tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 40)
+                          1 -> tone?.startTone(ToneGenerator.TONE_PROP_ACK, 120)
+                          2 -> tone?.startTone(ToneGenerator.TONE_PROP_BEEP2, 160)
+                          else -> tone?.startTone(ToneGenerator.TONE_PROP_NACK, 250)
+                      }
+                  } catch (ignored: Exception) {
+                  }
+              }
+
+              @Suppress("DEPRECATION")
+              private fun buzz(ms: Long) {
+                  if (!vibration) return
+                  try {
+                      val v = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
+                      if (!v.hasVibrator()) return
+                      if (Build.VERSION.SDK_INT >= 26) {
+                          v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+                      } else {
+                          v.vibrate(ms)
+                      }
+                  } catch (ignored: Exception) {
+                  }
+              }
+          }
+          KOTLIN
+
+      - name: Allow vibration in the manifest
+        shell: bash
+        run: |
+          MANIFEST=app/src/main/AndroidManifest.xml
+          if [ -f "$MANIFEST" ] && ! grep -q "android.permission.VIBRATE" "$MANIFEST"; then
+            sed -i 's|<application|<uses-permission android:name="android.permission.VIBRATE" />\n    <application|' "$MANIFEST"
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon assembleDebug
+          else
+            gradle --no-daemon assembleDebug
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Daveblast-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
