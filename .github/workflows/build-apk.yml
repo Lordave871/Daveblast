@@ -29,6 +29,25 @@ jobs:
             unzip -o BlockBlastAndroidProject.zip -d .
           fi
 
+      - name: Fix startup initialization crash
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/java/com/example/blockblast/MainActivity.kt")
+          s = p.read_text()
+          declaration = "    private val pieces = MutableList(3) { randomPiece() }\n"
+          if declaration not in s:
+              raise SystemExit("Could not find the pieces declaration to patch")
+          s = s.replace(declaration, "", 1)
+          anchor = "    )\n\n    private fun randomPiece(): Piece"
+          if anchor not in s:
+              raise SystemExit("Could not find the shapes list end to safely move pieces initialization")
+          s = s.replace(anchor, "    )\n\n" + declaration + "\n    private fun randomPiece(): Piece", 1)
+          p.write_text(s)
+          print("Fixed startup crash: shapes are initialized before random pieces")
+          PY
+
       - name: Android 11 vibration compatibility
         shell: bash
         run: |
