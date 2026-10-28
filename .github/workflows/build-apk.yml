@@ -116,24 +116,37 @@ jobs:
                   text(c,best.toString(),width*.16f,height*.053f,width*.043f,gold,true,Paint.Align.LEFT)
                   gear(c,width*.90f,height*.048f,width*.033f)
                   text(c,score.toString(),width*.5f,height*.105f,width*.105f,Color.WHITE,true,Paint.Align.CENTER)
-                  text(c,"D A V E B L A S T",width*.5f,height*.14f,width*.037f,Color.WHITE,true,Paint.Align.CENTER)
+                  text(c,"D A V E B L A S T",width*.5f,height*.14f,width*.039f,Color.WHITE,true,Paint.Align.CENTER)
                   text(c,"CLASSIC BLOCK PUZZLE",width*.5f,height*.166f,width*.025f,Color.rgb(205,218,250),false,Paint.Align.CENTER)
-                  size = min(width*.88f,height*.425f); unit = size/8f
+                  size = min(width*.92f,height*.435f); unit = size/8f
                   left = (width-size)/2f; top = height*.205f
                   round(c,left-4,top-4,left+size+4,top+size+4,15f,Color.argb(70,0,0,0))
                   round(c,left,top,left+size,top+size,10f,boardColor)
                   for (r in 0..7) for (col in 0..7) {
                       val x=left+col*unit+1.5f; val y=top+r*unit+1.5f; val color=board[r][col]
-                      round(c,x,y,x+unit-3,y+unit-3,unit*.1f,if(color==0) Color.rgb(35,47,96) else color)
-                      if(color!=0) round(c,x+unit*.08f,y+unit*.07f,x+unit*.86f,y+unit*.23f,unit*.08f,light(color,65))
+                      round(c,x+1,y+2,x+unit-2,y+unit-2,unit*.1f,Color.argb(90,0,0,0))
+                      round(c,x,y,x+unit-3,y+unit-4,unit*.1f,if(color==0) Color.rgb(35,47,96) else color)
+                      if(color!=0) {
+                          round(c,x+unit*.07f,y+unit*.05f,x+unit*.86f,y+unit*.22f,unit*.07f,light(color,65))
+                          round(c,x+unit*.10f,y+unit*.10f,x+unit*.23f,y+unit*.82f,unit*.05f,light(color,32))
+                      }
                   }
-                  text(c,"DRAG A BLOCK TO THE BOARD",width*.5f,top+size+height*.035f,width*.029f,Color.WHITE,true,Paint.Align.CENTER)
+                  text(c,"DRAG A BLOCK TO THE BOARD",width*.5f,top+size+height*.035f,width*.027f,Color.rgb(224,232,255),true,Paint.Align.CENTER)
                   trayTop=top+size+height*.055f; trayBottom=height*.965f
                   for(i in 0..2) {
                       val l=width/3f*i+width*.018f; val r=width/3f*(i+1)-width*.018f
-                      round(c,l,trayTop,r,trayBottom,17f,Color.argb(if(dragging==i)130 else 245,255,255,255))
-                      if(pieces[i].cells.isNotEmpty() && dragging!=i) drawPiece(c,pieces[i],(l+r)/2f,(trayTop+trayBottom)/2f-4f,min(width*.046f,unit*.55f))
-                      text(c,if(pieces[i].cells.isEmpty()) "✓" else (i+1).toString(),(l+r)/2f,trayBottom-9f,width*.026f,Color.rgb(107,124,171),true,Paint.Align.CENTER)
+                      if(dragging==i) {
+                          p.color=Color.argb(28,255,255,255)
+                          c.drawRoundRect(RectF(l,trayTop,r,trayBottom),17f,17f,p)
+                      }
+                      if(pieces[i].cells.isNotEmpty() && dragging!=i) {
+                          val availableH=trayBottom-trayTop-height*.045f
+                          val scale=min(width*.075f, min((r-l)*.22f,availableH*.22f))
+                          drawPiece(c,pieces[i],(l+r)/2f,(trayTop+trayBottom)/2f-height*.015f,scale)
+                      }
+                      if(pieces[i].cells.isEmpty()) {
+                          text(c,"✓",(l+r)/2f,(trayTop+trayBottom)/2f,width*.06f,Color.rgb(150,235,190),true,Paint.Align.CENTER)
+                      }
                   }
                   if(dragging>=0 && pieces[dragging].cells.isNotEmpty()) {
                       val a=pieces[dragging]; val o=origin(a,dx,dy)
@@ -162,9 +175,10 @@ jobs:
                   for((x,y) in a.cells) {
                       val l=sx+x*u+1; val t=sy+y*u+1
                       p.alpha=(255*alpha).toInt()
-                      round(c,l+1,t+2,l+u-2,t+u-1,u*.12f,Color.argb(80,0,0,0))
-                      round(c,l,t,l+u-3,t+u-4,u*.10f,a.color)
-                      round(c,l+u*.08f,t+u*.07f,l+u*.86f,t+u*.24f,u*.07f,light(a.color,65))
+                      round(c,l+1,t+2,l+u-2,t+u-1,u*.12f,Color.argb(100,0,0,0))
+                      round(c,l,t,l+u-3,t+u-4,u*.10f,light(a.color,-18))
+                      round(c,l+u*.07f,t+u*.06f,l+u*.86f,t+u*.24f,u*.07f,light(a.color,65))
+                      round(c,l+u*.08f,t+u*.24f,l+u*.20f,t+u*.83f,u*.04f,light(a.color,25))
                       p.alpha=255
                   }
               }
@@ -276,7 +290,7 @@ jobs:
               }
               private fun round(c:Canvas,l:Float,t:Float,r:Float,b:Float,rad:Float,color:Int){p.shader=null;p.style=Paint.Style.FILL;p.color=color;p.alpha=255;c.drawRoundRect(RectF(l,t,r,b),rad,rad,p)}
               private fun text(c:Canvas,s:String,x:Float,y:Float,sz:Float,color:Int,bold:Boolean,align:Paint.Align){p.shader=null;p.color=color;p.alpha=255;p.textSize=sz;p.typeface=Typeface.create("sans-serif",if(bold)Typeface.BOLD else Typeface.NORMAL);p.textAlign=align;c.drawText(s,x,y,p)}
-              private fun light(color:Int,n:Int)=Color.rgb(min(255,Color.red(color)+n),min(255,Color.green(color)+n),min(255,Color.blue(color)+n))
+              private fun light(color:Int,n:Int)=Color.rgb((Color.red(color)+n).coerceIn(0,255),(Color.green(color)+n).coerceIn(0,255),(Color.blue(color)+n).coerceIn(0,255))
           }
           KOTLIN
           python3 - <<'PY'
